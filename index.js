@@ -14,7 +14,9 @@ const app = express()
 const port = process.env.PORT || 4999
 
 const bodyParser = require('body-parser')
-const { firestore } = require("./firebase.utils")
+// const { firestore } = require("./firebase.utils")
+
+const jwt = require('jsonwebtoken')
 
 app.use(cors())
 
@@ -24,29 +26,138 @@ app.use(bodyParser.urlencoded({
 
 app.use(bodyParser.json());
 
+//VERIFY JWT TOKEN
+const verifyToken = (req, res, next) => {
+    const bearerHeader = req.headers['authorization']
 
-app.get('/api/getAllRecipes', async (req,res) => {
+    if(bearerHeader) {
+        const bearer = bearerHeader.split(" ")
+        const bearerToken = bearer[1]
 
-    let data = []
-    let response = await firebaseApp.firestore().collection('allRecipes').get()
-    response.forEach(item => {
-        data.push(item.data())
+        req.token = bearerToken;
+
+        next();
+    } else {
+        res.json({
+            message: "Unauthorized",
+            data: []
+        })
+    }
+}
+
+//UPDATE CURRENT RECIPE IN DATABASE
+app.post('/api/updateRecipe', async (req,res) => {
+    let { recipeName, steps, ingredients, uniqueId } = req.body
+    // console.log(30,recipeName, steps, ingredients, uniqueId)
+    await firebaseApp.firestore().doc(`/allRecipes/${uniqueId}`).update({
+        recipeName,
+        steps,
+        ingredients,
+        uniqueId
     })
-    
 
-    res.json(data);
+    res.json("Successfully updated in the DB")
 })
 
-app.post('/api/createRecipe', async (req, res) => {
-    let data = req.body
+//GET CURRENT RECIPE
+app.get('/api/getCurrentRecipe', async (req,res) => {
+    let currentUniqueId = req.query.uniqueId
+    let data = {}
+    let response = await firebaseApp.firestore().collection('allRecipes').where('uniqueId',"==",currentUniqueId).get()
+    response.forEach(item => {
+        data = item.data()
+    })
+    res.json(data)
+})
 
-    await firebaseApp.firestore().collection('allRecipes').doc(data.name).set(
-        { recipeName, ingredients, steps, chefName } = data
+//GET ALL RECIPES FROM API
+app.get('/api/getAllRecipes', verifyToken, (req,res) => {
+
+    jwt.verify(req.token, 'secretkey', async (err, authData) => {
+        if(err) {
+            res.json({
+                message: "Unauthorized",
+                data: []
+            })
+        } else {
+            let data = []
+            let response = await firebaseApp.firestore().collection('allRecipes').get()
+            response.forEach(item => {
+                data.push(item.data())
+            })
+            res.json({
+                data,
+                authData,
+                message: 'authorized'
+            });
+        }
+    })
+    
+    
+})
+
+//CREATE RECIPE API
+app.post('/api/createRecipe', async (req,res) => {
+    let data = req.body
+    let { uniqueId } = data
+    await firebaseApp.firestore().collection('allRecipes').doc(uniqueId).set(
+        { recipeName, ingredients, steps, chefName, uniqueId } = data
     )
 
     res.json("Successfully added the recipe")
 })
 
+//REGISTER A USER
+app.post('/api/registerUser', async (req,res) => {
+    let { email, password } = req.body
+    let uniqueId = new Date().getTime()
+
+    let loginData = []
+
+    let reference = await firebaseApp.firestore().collection('userData').where('email','==',email).get()
+    reference.forEach(item => {
+        if(item) {
+            loginData.push(item.data())
+        }
+    })
+    if(loginData.length === 0) {
+        await firebaseApp.firestore().collection('userData').doc(email).set({
+            email,
+            password,
+            uniqueId
+        })
+        res.json("Successfully registered")
+    } else {
+        res.json("User already exists")
+    }
+    // console.log(95,loginData)
+})
+
+//LOGIN USER
+app.post('/api/login', async (req,res) => {
+    let { email, password } = req.body
+
+    let userDetails = {}
+
+    let reference = await firebaseApp.firestore().collection('userData').where('email','==',email).get()
+    reference.forEach(item => {
+        if(item) {
+            userDetails["data"] = item.data()
+        }
+    })
+
+    
+    if((Object.keys(userDetails).length>0) && (userDetails.data.email === email && userDetails.data.password === password)) {
+        jwt.sign({ user: email}, 'secretkey', (err, token) => {
+            res.json({token})
+        })
+    } else {
+        res.json({token: ""})
+    }
+})
+
+
+//PORT LISTENING
 app.listen(port, () => {
     console.log("Connection established, app listening to ",port)
 })
